@@ -57,6 +57,23 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+        aurora: {
+          1: "hsl(var(--aurora-1))",
+          2: "hsl(var(--aurora-2))",
+          3: "hsl(var(--aurora-3))",
+        },
+        editor: {
+          bg: "hsl(var(--editor-bg))",
+          "active-line": "hsl(var(--editor-active-line))",
+          selection: "hsl(var(--editor-selection))",
+        },
+        terminal: {
+          bg: "hsl(var(--terminal-bg))",
+          foreground: "hsl(var(--terminal-foreground))",
+        },
+        success: "hsl(var(--success))",
+        warning: "hsl(var(--warning))",
+        error: "hsl(var(--error))",
       },
       borderRadius: {
         lg: "var(--radius)",
