@@ -66,28 +66,98 @@ export const IDE = () => {
     setSelectedFile(file);
   };
 
-  const handleFileCreate = (name: string, type: 'file' | 'folder') => {
-    const language = name.split('.').pop() || 'plaintext';
+  const handleFileCreate = (name: string, type: 'file' | 'folder', parentPath?: string) => {
+    const language = type === 'file' ? name.split('.').pop() || 'plaintext' : undefined;
     const newFile: FileNode = {
       id: Date.now().toString(),
       name,
       type,
       language,
-      content: '',
+      content: type === 'file' ? '' : undefined,
+      children: type === 'folder' ? [] : undefined,
+      path: parentPath ? `${parentPath}/${name}` : name,
     };
-    setFiles([...files, newFile]);
-    setSelectedFile(newFile);
+
+    if (parentPath) {
+      // Add to nested folder
+      const addToFolder = (nodes: FileNode[]): FileNode[] => {
+        return nodes.map((node) => {
+          if (node.path === parentPath && node.type === 'folder') {
+            return { ...node, children: [...(node.children || []), newFile] };
+          }
+          if (node.children) {
+            return { ...node, children: addToFolder(node.children) };
+          }
+          return node;
+        });
+      };
+      setFiles(addToFolder(files));
+    } else {
+      // Add to root
+      setFiles([...files, newFile]);
+    }
+
+    if (type === 'file') {
+      setSelectedFile(newFile);
+    }
   };
 
   const handleFileDelete = (id: string) => {
-    setFiles(files.filter((f) => f.id !== id));
+    const deleteFromTree = (nodes: FileNode[]): FileNode[] => {
+      return nodes.filter((node) => {
+        if (node.id === id) return false;
+        if (node.children) {
+          node.children = deleteFromTree(node.children);
+        }
+        return true;
+      });
+    };
+
+    setFiles(deleteFromTree(files));
     if (selectedFile?.id === id) {
-      setSelectedFile(files[0]);
+      const findFirstFile = (nodes: FileNode[]): FileNode | undefined => {
+        for (const node of nodes) {
+          if (node.type === 'file') return node;
+          if (node.children) {
+            const found = findFirstFile(node.children);
+            if (found) return found;
+          }
+        }
+      };
+      setSelectedFile(findFirstFile(files) || files[0]);
     }
   };
 
   const handleFileRename = (id: string, newName: string) => {
-    setFiles(files.map((f) => (f.id === id ? { ...f, name: newName } : f)));
+    const renameInTree = (nodes: FileNode[]): FileNode[] => {
+      return nodes.map((node) => {
+        if (node.id === id) {
+          const newPath = node.path?.split('/').slice(0, -1).concat(newName).join('/') || newName;
+          return { ...node, name: newName, path: newPath };
+        }
+        if (node.children) {
+          return { ...node, children: renameInTree(node.children) };
+        }
+        return node;
+      });
+    };
+    
+    const updatedFiles = renameInTree(files);
+    setFiles(updatedFiles);
+    
+    if (selectedFile?.id === id) {
+      const findFile = (nodes: FileNode[], targetId: string): FileNode | undefined => {
+        for (const node of nodes) {
+          if (node.id === targetId) return node;
+          if (node.children) {
+            const found = findFile(node.children, targetId);
+            if (found) return found;
+          }
+        }
+      };
+      const updated = findFile(updatedFiles, id);
+      if (updated) setSelectedFile(updated);
+    }
   };
 
   const handleCodeChange = (value: string | undefined) => {
