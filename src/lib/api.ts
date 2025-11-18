@@ -5,6 +5,7 @@ export interface ExecuteCodeRequest {
   language: string;
   input?: string;
   files?: Array<{ path: string; content: string }>;
+  path?: string;
 }
 
 export interface ExecuteCodeResponse {

@@ -1,250 +1,208 @@
 import express from 'express';
-import { Sandbox } from '@e2b/sdk';
+import { Sandbox } from '@e2b/code-interpreter';
 
 const router = express.Router();
 
-// Language configurations for e2b
-const LANGUAGE_CONFIGS = {
-  javascript: { template: 'base', cmd: 'node', ext: 'js' },
-  typescript: { template: 'base', cmd: 'npx tsx', ext: 'ts' },
-  python: { template: 'base', cmd: 'python3', ext: 'py' },
-  c: { template: 'base', cmd: 'gcc -o output code.c && ./output', ext: 'c' },
-  cpp: { template: 'base', cmd: 'g++ -o output code.cpp && ./output', ext: 'cpp' },
-  go: { template: 'base', cmd: 'go run', ext: 'go' },
-  rust: { template: 'base', cmd: 'rustc code.rs -o output && ./output', ext: 'rs' },
-  java: { template: 'base', cmd: 'javac Main.java && java Main', ext: 'java' },
-  php: { template: 'base', cmd: 'php', ext: 'php' },
-  ruby: { template: 'base', cmd: 'ruby', ext: 'rb' },
-  shell: { template: 'base', cmd: 'bash', ext: 'sh' }
+// Language routing config -> decides file extension and run command
+const LANGUAGE_RUNNERS: Record<string, { ext: string; run: (filepath: string) => string } > = {
+  python: { ext: 'py', run: (p) => `python3 ${p}` },
+  javascript: { ext: 'js', run: (p) => `node ${p}` },
+  typescript: { ext: 'ts', run: (p) => `npx tsx ${p}` },
+  bash: { ext: 'sh', run: (p) => `bash ${p}` },
+  shell: { ext: 'sh', run: (p) => `bash ${p}` },
+  c: { ext: 'c', run: (p) => `bash -lc "gcc ${p} -o /app_out && /app_out"` },
+  cpp: { ext: 'cpp', run: (p) => `bash -lc "g++ ${p} -o /app_out && /app_out"` },
+  go: { ext: 'go', run: (p) => `go run ${p}` },
+  rust: { ext: 'rs', run: (p) => `bash -lc "rustc ${p} -o /app_out && /app_out"` },
+  java: { ext: 'java', run: (_p) => `bash -lc "javac /Main.java && java -cp / Main"` },
+  php: { ext: 'php', run: (p) => `php ${p}` },
+  ruby: { ext: 'rb', run: (p) => `ruby ${p}` },
 };
 
-// Execute code in e2b sandbox
+// Helpers
+const detectHtml = (code?: string) => !!code && /<html[\s>]/i.test(code);
+
+// Execute code in E2B sandbox
 router.post('/run', async (req, res) => {
-  const { code, language = 'javascript', input = '', files = [] } = req.body;
+  const { code, language = 'javascript', input = '', files = [], path } = req.body || {};
 
-  if (!code) {
-    return res.status(400).json({ error: 'Code is required' });
-  }
+  if (!code) return res.status(400).json({ error: 'Code is required' });
 
-  const config = LANGUAGE_CONFIGS[language.toLowerCase()];
-  if (!config) {
-    return res.status(400).json({ 
+  const langKey = String(language || '').toLowerCase();
+  const runner = LANGUAGE_RUNNERS[langKey];
+  if (!runner) {
+    return res.status(400).json({
       error: `Unsupported language: ${language}`,
-      supported: Object.keys(LANGUAGE_CONFIGS)
+      supported: Object.keys(LANGUAGE_RUNNERS)
     });
   }
 
-  let sandbox;
+  let sandbox: any;
   try {
-    // Create sandbox
-    sandbox = await Sandbox.create({ 
-      template: config.template,
-      apiKey: process.env.E2B_API_KEY,
-      timeoutMs: 60000
-    });
+    // Start sandbox (lives ~5 minutes by default)
+    sandbox = await Sandbox.create({ apiKey: process.env.E2B_API_KEY, timeoutMs: 60_000 });
 
-    // Write code file
-    const filename = `code.${config.ext}`;
-    await sandbox.files.write(filename, code);
+    // Ensure working dir
+    const workDir = '/project';
 
-    // Write additional files if provided
-    for (const file of files) {
-      await sandbox.files.write(file.path, file.content);
-    }
-
-    // Install dependencies if package.json exists
-    if (language === 'javascript' || language === 'typescript') {
-      const hasPackageJson = files.some(f => f.path === 'package.json');
-      if (hasPackageJson) {
-        const installProc = await sandbox.process.start({ cmd: 'npm install' });
-        await installProc.wait();
+    // Upload project files if provided
+    if (Array.isArray(files) && files.length) {
+      for (const f of files) {
+        const target = f.path?.startsWith('/') ? f.path : `${workDir}/${f.path || ''}`;
+        await sandbox.files.write(target, f.content ?? '');
       }
     }
 
-    // Install Python dependencies if requirements.txt exists
-    if (language === 'python') {
-      const hasRequirements = files.some(f => f.path === 'requirements.txt');
-      if (hasRequirements) {
-        const installProc = await sandbox.process.start({ cmd: 'pip install -r requirements.txt' });
-        await installProc.wait();
+    // Write main code file
+    const filePath = path
+      ? (path.startsWith('/') ? path : `${workDir}/${path}`)
+      : `${workDir}/main.${runner.ext}`;
+
+    // If JS and code is HTML, save as index.html for preview
+    const isHtml = langKey === 'javascript' && detectHtml(code);
+    const finalFilePath = isHtml ? `${workDir}/index.html` : filePath;
+
+    await sandbox.files.write(finalFilePath, code);
+
+    // Install Node deps when package.json exists
+    if ((langKey === 'javascript' || langKey === 'typescript')) {
+      const pkgJsonExists = Array.isArray(files) && files.some((f) => (f.path === 'package.json' || f.path === '/package.json' || f.path?.endsWith('/package.json')));
+      if (pkgJsonExists) {
+        await sandbox.commands.run(`bash -lc "cd ${workDir} && npm install"`);
       }
     }
 
-    // Execute code with streaming output
-    let stdout = '';
-    let stderr = '';
-    
-    const process = await sandbox.process.start({
-      cmd: `${config.cmd} ${filename}`,
-      onStdout: (data) => {
-        stdout += data;
-        console.log('stdout:', data);
-      },
-      onStderr: (data) => {
-        stderr += data;
-        console.log('stderr:', data);
-      },
-    });
-
-    // Send input if provided
-    if (input) {
-      await process.sendStdin(input);
-    }
-
-    // Wait for completion
-    const result = await process.wait();
-
-    // Get sandbox URL if it's a web project
-    let previewUrl = null;
-    if (language === 'javascript' || language === 'typescript') {
-      const hasHtml = files.some(f => f.path.endsWith('.html'));
-      if (hasHtml) {
-        previewUrl = `https://${sandbox.getHostname()}`;
+    // Install Python deps when requirements.txt exists
+    if (langKey === 'python') {
+      const reqExists = Array.isArray(files) && files.some((f) => (f.path === 'requirements.txt' || f.path === '/requirements.txt' || f.path?.endsWith('/requirements.txt')));
+      if (reqExists) {
+        await sandbox.commands.run(`bash -lc "cd ${workDir} && pip install -r requirements.txt"`);
       }
     }
 
-    res.json({
+    // Decide command
+    let cmd: string;
+    if (isHtml) {
+      // Start simple static server in background and return preview URL
+      // Serve on 8000 to avoid conflicts
+      await sandbox.commands.run(`bash -lc "cd ${workDir} && nohup python3 -m http.server 8000 >/dev/null 2>&1 &"`);
+      // Try to expose preview URL
+      let previewUrl: string | null = null;
+      if (typeof sandbox.getHostname === 'function') {
+        const host = await sandbox.getHostname();
+        if (host) previewUrl = `https://${host}:8000/`;
+      }
+
+      // No direct command execution needed for pure HTML; return success
+      return res.json({
+        success: true,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+        previewUrl,
+      });
+    } else {
+      cmd = runner.run(finalFilePath);
+    }
+
+    // If input provided, pipe it
+    const fullCmd = input ? `bash -lc "printf %s \"${input.replace(/"/g, '\\"')}\" | ${cmd}"` : cmd;
+
+    const result = await sandbox.commands.run(fullCmd);
+
+    // Best-effort preview for Node/TS web servers (user may have started a server on 3000/5173 etc.)
+    let previewUrl: string | null = null;
+    if (typeof sandbox.getHostname === 'function') {
+      const host = await sandbox.getHostname();
+      if (host) previewUrl = `https://${host}`; // User code should bind to 0.0.0.0 and expose port
+    }
+
+    return res.json({
       success: result.exitCode === 0,
-      exitCode: result.exitCode,
-      stdout: stdout || result.stdout || '',
-      stderr: stderr || result.stderr || '',
-      executionTime: result.timestamp,
-      previewUrl
+      exitCode: result.exitCode ?? 0,
+      stdout: result.stdout || result.logs || '',
+      stderr: result.stderr || '',
+      previewUrl,
     });
-
-  } catch (error) {
+  } catch (error: any) {
     console.error('Execution error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      details: error.toString()
-    });
+    return res.status(500).json({ error: error?.message || 'Execution failed', details: String(error) });
   } finally {
     if (sandbox) {
-      await sandbox.close();
+      try { await (sandbox.kill?.() ?? sandbox.close?.()); } catch {}
     }
   }
 });
 
-// Execute terminal command
+// Execute terminal command (universal)
 router.post('/command', async (req, res) => {
-  const { command, cwd = '/home/user', timeout = 30000 } = req.body;
+  const { command, cwd = '/project', timeout = 60_000 } = req.body || {};
+  if (!command) return res.status(400).json({ error: 'Command is required' });
 
-  if (!command) {
-    return res.status(400).json({ error: 'Command is required' });
-  }
-
-  let sandbox;
+  let sandbox: any;
   try {
-    sandbox = await Sandbox.create({ 
-      template: 'base',
-      apiKey: process.env.E2B_API_KEY,
-      timeoutMs: timeout
-    });
+    sandbox = await Sandbox.create({ apiKey: process.env.E2B_API_KEY, timeoutMs: timeout });
 
-    let stdout = '';
-    let stderr = '';
+    // Ensure work dir exists
+    await sandbox.commands.run(`bash -lc "mkdir -p ${cwd}"`);
 
-    const process = await sandbox.process.start({
-      cmd: command,
-      cwd,
-      onStdout: (data) => {
-        stdout += data;
-        console.log('stdout:', data);
-      },
-      onStderr: (data) => {
-        stderr += data;
-        console.log('stderr:', data);
-      },
-    });
+    const result = await sandbox.commands.run(`bash -lc "cd ${cwd} && ${command}"`, { timeoutMs: timeout });
 
-    const result = await process.wait();
-
-    res.json({
+    return res.json({
       success: result.exitCode === 0,
-      exitCode: result.exitCode,
-      stdout: stdout || result.stdout || '',
-      stderr: stderr || result.stderr || '',
-      cwd
+      exitCode: result.exitCode ?? 0,
+      stdout: result.stdout || result.logs || '',
+      stderr: result.stderr || '',
+      cwd,
     });
-
-  } catch (error) {
+  } catch (error: any) {
     console.error('Command execution error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      details: error.toString()
-    });
+    return res.status(500).json({ error: error?.message || 'Command failed', details: String(error) });
   } finally {
     if (sandbox) {
-      await sandbox.close();
+      try { await (sandbox.kill?.() ?? sandbox.close?.()); } catch {}
     }
   }
 });
 
-// Install package (npm, pip, etc.)
+// Install packages (npm, pip, apt, cargo)
 router.post('/install', async (req, res) => {
-  const { packageManager = 'npm', packages = [] } = req.body;
-
-  if (!packages.length) {
+  const { packageManager = 'npm', packages = [] } = req.body || {};
+  if (!Array.isArray(packages) || packages.length === 0) {
     return res.status(400).json({ error: 'Packages array is required' });
   }
 
-  const commands = {
+  const commands: Record<string, string> = {
     npm: `npm install ${packages.join(' ')}`,
     pip: `pip install ${packages.join(' ')}`,
     apt: `apt-get update && apt-get install -y ${packages.join(' ')}`,
-    cargo: `cargo install ${packages.join(' ')}`
+    cargo: `cargo install ${packages.join(' ')}`,
   };
 
-  const command = commands[packageManager];
-  if (!command) {
-    return res.status(400).json({ 
-      error: `Unsupported package manager: ${packageManager}`,
-      supported: Object.keys(commands)
-    });
+  const cmd = commands[packageManager];
+  if (!cmd) {
+    return res.status(400).json({ error: `Unsupported package manager: ${packageManager}`, supported: Object.keys(commands) });
   }
 
-  let sandbox;
+  let sandbox: any;
   try {
-    sandbox = await Sandbox.create({ 
-      template: 'base',
-      apiKey: process.env.E2B_API_KEY,
-      timeoutMs: 120000 // 2 minutes for installations
-    });
+    sandbox = await Sandbox.create({ apiKey: process.env.E2B_API_KEY, timeoutMs: 120_000 });
 
-    let stdout = '';
-    let stderr = '';
+    const result = await sandbox.commands.run(`bash -lc "${cmd}"`, { timeoutMs: 120_000 });
 
-    const process = await sandbox.process.start({
-      cmd: command,
-      onStdout: (data) => {
-        stdout += data;
-        console.log('stdout:', data);
-      },
-      onStderr: (data) => {
-        stderr += data;
-        console.log('stderr:', data);
-      },
-    });
-
-    const result = await process.wait();
-
-    res.json({
+    return res.json({
       success: result.exitCode === 0,
-      exitCode: result.exitCode,
-      stdout: stdout || result.stdout || '',
-      stderr: stderr || result.stderr || '',
-      packages
+      exitCode: result.exitCode ?? 0,
+      stdout: result.stdout || result.logs || '',
+      stderr: result.stderr || '',
+      packages,
     });
-
-  } catch (error) {
+  } catch (error: any) {
     console.error('Installation error:', error);
-    res.status(500).json({ 
-      error: error.message,
-      details: error.toString()
-    });
+    return res.status(500).json({ error: error?.message || 'Installation failed', details: String(error) });
   } finally {
     if (sandbox) {
-      await sandbox.close();
+      try { await (sandbox.kill?.() ?? sandbox.close?.()); } catch {}
     }
   }
 });
