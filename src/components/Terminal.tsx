@@ -193,7 +193,7 @@ export const Terminal = ({ currentFile, onPreviewUrl }: TerminalProps) => {
             </div>
           </ScrollArea>
 
-          <div className="p-2 border-t border-border flex gap-2 bg-background">
+          <div className="p-2 border-t border-border flex gap-2 bg-background shrink-0">
             <input
               type="text"
               value={input}

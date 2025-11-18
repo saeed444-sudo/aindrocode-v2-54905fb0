@@ -117,6 +117,27 @@ class IndexedDBManager {
       request.onerror = () => reject(request.error);
     });
   }
+
+  async deleteProject(projectId: string): Promise<void> {
+    if (!this.db) await this.init();
+    if (!this.db) throw new Error('Database not initialized');
+    
+    // Delete all files associated with the project
+    const files = await this.getProjectFiles(projectId);
+    for (const file of files) {
+      await this.deleteFile(file.id);
+    }
+    
+    // Delete the project itself
+    return new Promise((resolve, reject) => {
+      const transaction = this.db!.transaction([PROJECTS_STORE], 'readwrite');
+      const store = transaction.objectStore(PROJECTS_STORE);
+      const request = store.delete(projectId);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  }
 }
 
 export const dbManager = new IndexedDBManager();

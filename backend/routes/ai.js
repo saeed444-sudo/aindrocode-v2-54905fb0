@@ -1,12 +1,12 @@
 import express from 'express';
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { getSystemPrompt } from '../prompts/master-agent.js';
 
 const router = express.Router();
 
-// Generate code using Claude with orchestrational agent
+// Generate code using GPT-5.1 with orchestrational agent
 router.post('/generate', async (req, res) => {
-  const { prompt, apiKey, model = 'claude-3-7-sonnet-20250219', context = '' } = req.body;
+  const { prompt, apiKey, model = 'gpt-5', context = '' } = req.body;
 
   if (!prompt) {
     return res.status(400).json({ error: 'Prompt is required' });
@@ -17,26 +17,25 @@ router.post('/generate', async (req, res) => {
   }
 
   try {
-    const anthropic = new Anthropic({ apiKey });
+    const openai = new OpenAI({ apiKey });
 
     const systemPrompt = getSystemPrompt(context);
 
-    const message = await anthropic.messages.create({
+    const completion = await openai.chat.completions.create({
       model,
       max_tokens: 8192,
-      system: systemPrompt,
-      messages: [{
-        role: 'user',
-        content: prompt
-      }]
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt }
+      ]
     });
 
-    const code = message.content[0].text;
+    const code = completion.choices[0].message.content;
 
     res.json({
       success: true,
       code,
-      usage: message.usage
+      usage: completion.usage
     });
 
   } catch (error) {
@@ -55,7 +54,7 @@ router.post('/fix', async (req, res) => {
     error, 
     language, 
     apiKey, 
-    model = 'claude-3-7-sonnet-20250219',
+    model = 'gpt-5',
     maxIterations = 5,
     context = ''
   } = req.body;
@@ -65,7 +64,7 @@ router.post('/fix', async (req, res) => {
   }
 
   try {
-    const anthropic = new Anthropic({ apiKey });
+    const openai = new OpenAI({ apiKey });
 
     let currentCode = code;
     let iteration = 0;
@@ -91,17 +90,16 @@ ${error}
 
 Fix this error and return the corrected code. Be precise and avoid introducing new issues.`;
 
-      const message = await anthropic.messages.create({
+      const completion = await openai.chat.completions.create({
         model,
         max_tokens: 8192,
-        system: systemPrompt,
-        messages: [{
-          role: 'user',
-          content: prompt
-        }]
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: prompt }
+        ]
       });
 
-      currentCode = message.content[0].text.trim();
+      currentCode = completion.choices[0].message.content.trim();
       fixes.push({
         iteration: iteration + 1,
         error: error.substring(0, 200),
@@ -120,7 +118,7 @@ Fix this error and return the corrected code. Be precise and avoid introducing n
       fixedCode: currentCode,
       iterations: iteration,
       fixes,
-      usage: message.usage
+      usage: completion.usage
     });
 
   } catch (error) {
@@ -138,7 +136,7 @@ router.post('/chat', async (req, res) => {
     message, 
     history = [], 
     apiKey, 
-    model = 'claude-3-7-sonnet-20250219',
+    model = 'gpt-5',
     context = '',
     files = []
   } = req.body;
@@ -148,7 +146,7 @@ router.post('/chat', async (req, res) => {
   }
 
   try {
-    const anthropic = new Anthropic({ apiKey });
+    const openai = new OpenAI({ apiKey });
 
     // Build rich context with file structure
     let enrichedContext = context;
@@ -162,23 +160,23 @@ router.post('/chat', async (req, res) => {
     const systemPrompt = getSystemPrompt(enrichedContext);
 
     const messages = [
+      { role: 'system', content: systemPrompt },
       ...history,
       { role: 'user', content: message }
     ];
 
-    const response = await anthropic.messages.create({
+    const completion = await openai.chat.completions.create({
       model,
       max_tokens: 8192,
-      system: systemPrompt,
       messages
     });
 
-    const reply = response.content[0].text;
+    const reply = completion.choices[0].message.content;
 
     res.json({
       success: true,
       reply,
-      usage: response.usage
+      usage: completion.usage
     });
 
   } catch (error) {

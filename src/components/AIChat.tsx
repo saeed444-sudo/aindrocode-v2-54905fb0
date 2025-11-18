@@ -23,7 +23,7 @@ export const AIChat = ({ isEnabled, onSendMessage, messages = [], isLoading = fa
   const [input, setInput] = useState('');
 
   const handleSend = () => {
-    if (input.trim() && onSendMessage) {
+    if (input.trim() && onSendMessage && !isLoading) {
       onSendMessage(input);
       setInput('');
     }
