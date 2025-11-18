@@ -7,10 +7,12 @@ import { FileExplorer, FileNode } from '@/components/FileExplorer';
 import { Terminal } from '@/components/Terminal';
 import { AIChat } from '@/components/AIChat';
 import { Preview } from '@/components/Preview';
+import { ProjectManager } from '@/components/ProjectManager';
 import { Button } from '@/components/ui/button';
-import { Settings, LogOut, Play, Save, Menu } from 'lucide-react';
+import { Settings, LogOut, Play, Save, Menu, FolderOpen } from 'lucide-react';
 import { toast } from 'sonner';
 import { dbManager, Project } from '@/lib/indexedDB';
+import { api } from '@/lib/api';
 import { motion } from 'framer-motion';
 import {
   AlertDialog,
@@ -48,6 +50,9 @@ export const IDE = () => {
   const [currentProjectId, setCurrentProjectId] = useState<string>('default-project');
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [showProjectManager, setShowProjectManager] = useState(false);
+  const [aiMessages, setAiMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }>>([]);
+  const [isAiLoading, setIsAiLoading] = useState(false);
 
   // Load project from IndexedDB on mount
   useEffect(() => {
@@ -295,6 +300,73 @@ export const IDE = () => {
     }
   };
 
+  const handleLoadProject = async (projectId: string) => {
+    try {
+      setCurrentProjectId(projectId);
+      const projectFiles = await dbManager.getProjectFiles(projectId);
+      if (projectFiles.length > 0) {
+        const convertToFileNodes = (files: any[]): FileNode[] => {
+          return files.map(f => ({
+            id: f.id,
+            name: f.name,
+            type: 'file' as const,
+            language: f.language,
+            content: f.content,
+            path: f.path,
+          }));
+        };
+        const loadedFiles = convertToFileNodes(projectFiles);
+        setFiles(loadedFiles);
+        setSelectedFile(loadedFiles[0]);
+        toast.success('Project loaded successfully!');
+      }
+    } catch (error) {
+      console.error('Failed to load project:', error);
+      toast.error('Failed to load project');
+    }
+  };
+
+  const handleAiMessage = async (message: string) => {
+    if (!message.trim()) return;
+    
+    const apiKey = localStorage.getItem('openai_api_key');
+    if (!apiKey) {
+      toast.error('Please set your OpenAI API key in Settings');
+      return;
+    }
+
+    const userMessage = { role: 'user' as const, content: message, timestamp: Date.now() };
+    setAiMessages(prev => [...prev, userMessage]);
+    setIsAiLoading(true);
+
+    try {
+      const filesContext = files.map(f => ({
+        name: f.name,
+        language: f.language || 'text',
+        content: f.content || ''
+      }));
+
+      const response = await api.chat({
+        message,
+        history: aiMessages,
+        apiKey,
+        model: 'gpt-5',
+        context: `Current file: ${selectedFile?.name}`,
+      });
+
+      if (response.success) {
+        setAiMessages(prev => [...prev, { role: 'assistant', content: response.reply, timestamp: Date.now() }]);
+      } else {
+        toast.error('AI request failed');
+      }
+    } catch (error: any) {
+      console.error('AI chat error:', error);
+      toast.error(error.message || 'Failed to send message');
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen aurora-bg flex items-center justify-center">
@@ -328,6 +400,9 @@ export const IDE = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={() => setShowProjectManager(true)} title="Projects">
+            <FolderOpen className="w-4 h-4" />
+          </Button>
           <Button variant="ghost" size="icon" onClick={handleSaveClick} title="Save">
             <Save className="w-4 h-4" />
           </Button>
@@ -392,7 +467,20 @@ export const IDE = () => {
       </div>
 
       {/* AI Chat */}
-      <AIChat isEnabled={aiEnabled} />
+      <AIChat 
+        isEnabled={aiEnabled} 
+        onSendMessage={handleAiMessage}
+        messages={aiMessages}
+        isLoading={isAiLoading}
+      />
+
+      {/* Project Manager */}
+      <ProjectManager
+        isOpen={showProjectManager}
+        onClose={() => setShowProjectManager(false)}
+        onProjectLoad={handleLoadProject}
+        currentProjectId={currentProjectId}
+      />
 
       {/* Save Confirmation Dialog */}
       <AlertDialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>

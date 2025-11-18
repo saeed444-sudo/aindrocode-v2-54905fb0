@@ -22,7 +22,7 @@ export const Settings = () => {
       if (user) {
         setUser(user);
         const savedAiMode = localStorage.getItem('ai_mode_enabled') === 'true';
-        const savedApiKey = localStorage.getItem('claude_api_key') || '';
+        const savedApiKey = localStorage.getItem('openai_api_key') || '';
         setAiEnabled(savedAiMode);
         setApiKey(savedApiKey);
       } else {
@@ -40,7 +40,7 @@ export const Settings = () => {
   };
 
   const handleApiKeySave = () => {
-    localStorage.setItem('claude_api_key', apiKey);
+    localStorage.setItem('openai_api_key', apiKey);
     toast.success('API key saved');
   };
 
@@ -114,21 +114,21 @@ export const Settings = () => {
                     className="space-y-4 pt-4 border-t border-border"
                   >
                     <div>
-                      <Label>Anthropic API Key</Label>
+                      <Label>OpenAI API Key</Label>
                       <p className="text-xs text-muted-foreground mb-2">
                         Get your API key from{' '}
                         <a
-                          href="https://console.anthropic.com"
+                          href="https://platform.openai.com/api-keys"
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-primary hover:underline"
                         >
-                          Anthropic Console
+                          OpenAI Platform
                         </a>
                       </p>
                       <Input
                         type="password"
-                        placeholder="sk-ant-..."
+                        placeholder="sk-..."
                         value={apiKey}
                         onChange={(e) => setApiKey(e.target.value)}
                       />
