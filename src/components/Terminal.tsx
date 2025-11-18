@@ -54,7 +54,8 @@ export const Terminal = ({ currentFile, onPreviewUrl }: TerminalProps) => {
         const language = currentFile.language || 'javascript';
         const result = await api.executeCode({
           code: currentFile.content,
-          language
+          language,
+          path: `/${currentFile.name}`,
         });
 
         if (result.stdout) addOutput(result.stdout);
